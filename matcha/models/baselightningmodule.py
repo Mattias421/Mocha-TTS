@@ -15,6 +15,12 @@ from matcha.utils.utils import plot_tensor
 
 log = utils.get_pylogger(__name__)
 
+def _log_image(logger, name: str, tensor, step: int) -> None:
+    """Log an image in a logger-agnostic way (works with TensorBoard and wandb)."""
+    experiment = logger.experiment
+
+    import wandb
+    experiment.log({name: wandb.Image(tensor)})
 
 class BaseLightningClass(LightningModule, ABC):
     def update_data_statistics(self, data_statistics):
@@ -172,7 +178,7 @@ class BaseLightningClass(LightningModule, ABC):
                 log.debug("Plotting original samples")
                 for i in range(2):
                     y = one_batch["y"][i].unsqueeze(0).to(self.device)
-                    self.logger.experiment.add_image(
+                    _log_image(
                         f"original/{i}",
                         plot_tensor(y.squeeze().cpu()),
                         self.current_epoch,
@@ -187,19 +193,19 @@ class BaseLightningClass(LightningModule, ABC):
                 output = self.synthesise(x[:, :x_lengths], x_lengths, n_timesteps=10, spks=spks)
                 y_enc, y_dec = output["encoder_outputs"], output["decoder_outputs"]
                 attn = output["attn"]
-                self.logger.experiment.add_image(
+                _log_image(
                     f"generated_enc/{i}",
                     plot_tensor(y_enc.squeeze().cpu()),
                     self.current_epoch,
                     dataformats="HWC",
                 )
-                self.logger.experiment.add_image(
+                _log_image(
                     f"generated_dec/{i}",
                     plot_tensor(y_dec.squeeze().cpu()),
                     self.current_epoch,
                     dataformats="HWC",
                 )
-                self.logger.experiment.add_image(
+                _log_image(
                     f"alignment/{i}",
                     plot_tensor(attn.squeeze().cpu()),
                     self.current_epoch,

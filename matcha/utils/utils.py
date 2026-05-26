@@ -144,7 +144,7 @@ def save_figure_to_numpy(fig):
 def plot_tensor(tensor):
     plt.style.use("default")
     fig, ax = plt.subplots(figsize=(12, 3))
-    im = ax.imshow(tensor, aspect="auto", origin="lower", interpolation="none")
+    im = ax.imshow(tensor, aspect="auto", origin="lower", interpolation="none", cmap='jet')
     plt.colorbar(im, ax=ax)
     plt.tight_layout()
     fig.canvas.draw()
@@ -156,7 +156,7 @@ def plot_tensor(tensor):
 def save_plot(tensor, savepath):
     plt.style.use("default")
     fig, ax = plt.subplots(figsize=(12, 3))
-    im = ax.imshow(tensor, aspect="auto", origin="lower", interpolation="none")
+    im = ax.imshow(tensor, aspect="auto", origin="lower", interpolation="none", cmap="jet")
     plt.colorbar(im, ax=ax)
     plt.tight_layout()
     fig.canvas.draw()
