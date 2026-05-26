@@ -45,18 +45,15 @@ conda create -n matcha-tts python=3.10 -y
 conda activate matcha-tts
 ```
 
-2. Install Matcha TTS using pip or from source
+2. Install Matcha TTS using pip or from source (for development this is the best option)
 
-```bash
-pip install matcha-tts
-```
 
 from source
 
 ```bash
-pip install git+https://github.com/shivammehta25/Matcha-TTS.git
-cd Matcha-TTS
-pip install -e .
+uv venv
+uv pip install -e .
+source .venv/bin/activate
 ```
 
 3. Run CLI / gradio app / jupyter notebook
