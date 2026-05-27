@@ -7,6 +7,7 @@ import torch
 import matcha.utils.monotonic_align as monotonic_align  # pylint: disable=consider-using-from-import
 from matcha import utils
 from matcha.models.baselightningmodule import BaseLightningClass
+from matcha.models.components.cde import NeuralCDE
 from matcha.models.components.flow_matching import CFM
 from matcha.models.components.text_encoder import TextEncoder
 from matcha.utils.model import (
@@ -36,6 +37,7 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         scheduler=None,
         prior_loss=True,
         use_precomputed_durations=False,
+        cde=None,
     ):
         super().__init__()
 
@@ -48,6 +50,7 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         self.out_size = out_size
         self.prior_loss = prior_loss
         self.use_precomputed_durations = use_precomputed_durations
+        self.cde = None
 
         if n_spks > 1:
             self.spk_emb = torch.nn.Embedding(n_spks, spk_emb_dim)
@@ -69,6 +72,17 @@ class MatchaTTS(BaseLightningClass):  # 🍵
             n_spks=n_spks,
             spk_emb_dim=spk_emb_dim,
         )
+
+        if cde is not None and bool(getattr(cde, "enabled", True)):
+            self.cde = NeuralCDE(
+                channels=encoder.encoder_params.n_feats,
+                hidden_channels=cde.hidden_channels,
+                interpolation=getattr(cde, "interpolation", "linear"),
+                solver=getattr(cde, "solver", "reversible_heun"),
+                dt=getattr(cde, "dt", 0.01),
+                atol=getattr(cde, "atol", 1e-5),
+                rtol=getattr(cde, "rtol", 1e-5),
+            )
 
         self.update_data_statistics(data_statistics)
 
@@ -134,8 +148,15 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         mu_y = mu_y.transpose(1, 2)
         encoder_outputs = mu_y[:, :, :y_max_length]
 
+        mu_y_for_decoder = mu_y
+        if self.cde is not None:
+            durations_y = torch.matmul(
+                attn.squeeze(1).transpose(1, 2), torch.exp(logw).transpose(1, 2)
+            ).transpose(1, 2)
+            mu_y_for_decoder = self.cde(mu_y, y_mask, durations=durations_y.squeeze(1))
+
         # Generate sample tracing the probability flow
-        decoder_outputs = self.decoder(mu_y, y_mask, n_timesteps, temperature, spks)
+        decoder_outputs = self.decoder(mu_y_for_decoder, y_mask, n_timesteps, temperature, spks)
         decoder_outputs = decoder_outputs[:, :, :y_max_length]
 
         t = (dt.datetime.now() - t).total_seconds()
@@ -233,8 +254,15 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2))
         mu_y = mu_y.transpose(1, 2)
 
+        mu_y_for_decoder = mu_y
+        if self.cde is not None:
+            durations_y = torch.matmul(
+                attn.squeeze(1).transpose(1, 2), torch.exp(logw_).transpose(1, 2)
+            ).transpose(1, 2)
+            mu_y_for_decoder = self.cde(mu_y, y_mask, durations=durations_y.squeeze(1))
+
         # Compute loss of the decoder
-        diff_loss, _ = self.decoder.compute_loss(x1=y, mask=y_mask, mu=mu_y, spks=spks, cond=cond)
+        diff_loss, _ = self.decoder.compute_loss(x1=y, mask=y_mask, mu=mu_y_for_decoder, spks=spks, cond=cond)
 
         if self.prior_loss:
             prior_loss = torch.sum(0.5 * ((y - mu_y) ** 2 + math.log(2 * math.pi)) * y_mask)
