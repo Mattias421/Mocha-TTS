@@ -1,0 +1,11 @@
+# @package _global_
+
+# Fine-tuning entrypoint config for matcha/finetune_mocha.py.
+# This inherits training defaults but provides a non-mandatory run_name
+# so Hydra can always resolve hydra.run.dir without extra CLI overrides.
+defaults:
+  - train
+  - _self_
+
+task_name: "finetune_mocha"
+run_name: "default"
