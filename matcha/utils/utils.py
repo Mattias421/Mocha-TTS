@@ -136,8 +136,9 @@ def intersperse(lst, item):
 
 
 def save_figure_to_numpy(fig):
-    data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep="")
-    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    fig.canvas.draw()
+    data = np.asarray(fig.canvas.buffer_rgba())
+    data = data[:, :, :3]
     return data
 
 
