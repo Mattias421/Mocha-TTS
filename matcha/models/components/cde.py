@@ -165,18 +165,27 @@ class NeuralCDE(nn.Module):
             device=x.device,
             dtype=x.dtype,
         )
+        solver = self.solver
+        backend = None
+
         cdeint_kwargs = dict(
             X=X,
             z0=z0,
             func=self.func,
             t=t_grid,
-            method=self.solver,
-            options={"step_size": self.dt},
+            method=solver,
             atol=self.atol,
             rtol=self.rtol,
         )
-        if self.solver == "reversible_heun":
-            cdeint_kwargs["backend"] = "torchsde"
+        if solver == "reversible_heun":
+            backend = "torchsde"
+            # torchsde.sdeint expects `dt` as a top-level kwarg.
+            cdeint_kwargs["dt"] = self.dt
+        else:
+            # torchdiffeq odeint-style solvers take step size via `options`.
+            cdeint_kwargs["options"] = {"step_size": self.dt}
+        if backend is not None:
+            cdeint_kwargs["backend"] = backend
 
         z_t = torchcde.cdeint(**cdeint_kwargs)  # (b, t, hidden)
 
