@@ -40,23 +40,32 @@ def _fill_forward(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
 
 
 class CDEFunc(torch.nn.Module):
-    def __init__(self, input_channels, hidden_channels, width=None):
+    def __init__(self, input_channels, hidden_channels, width=None, num_layers: int = 2):
         super(CDEFunc, self).__init__()
         self.input_channels = input_channels
         self.hidden_channels = hidden_channels
+        self.num_layers = int(num_layers)
+        if self.num_layers < 1:
+            raise ValueError(f"Expected num_layers >= 1, got {self.num_layers}")
 
         self.width = int(width) if width is not None else int(hidden_channels) * 2
 
-        self.linear1 = torch.nn.Linear(hidden_channels, self.width)
-        self.linear2 = torch.nn.Linear(self.width, input_channels * hidden_channels)
+        hidden_layers = []
+        in_dim = hidden_channels
+        for _ in range(self.num_layers - 1):
+            hidden_layers.append(torch.nn.Linear(in_dim, self.width))
+            in_dim = self.width
+        self.hidden_layers = torch.nn.ModuleList(hidden_layers)
+        self.out = torch.nn.Linear(in_dim, input_channels * hidden_channels)
 
     def forward(self, t, z):
         # z has shape (batch, hidden_channels)
         input_dtype = z.dtype
-        z = z.to(self.linear1.weight.dtype)
-        z = self.linear1(z)
-        z = z.relu()
-        z = self.linear2(z)
+        z = z.to(self.out.weight.dtype)
+        for layer in self.hidden_layers:
+            z = layer(z)
+            z = z.relu()
+        z = self.out(z)
         z = z.tanh()
         z = z.view(z.size(0), self.hidden_channels, self.input_channels)
         return z.to(input_dtype)
@@ -83,6 +92,7 @@ class NeuralCDE(nn.Module):
         *,
         interpolation: str = "linear",
         solver: str = "reversible_heun",
+        num_layers: int = 2,
         dt: float = 0.01,
         atol: float = 1e-5,
         rtol: float = 1e-5,
@@ -95,7 +105,7 @@ class NeuralCDE(nn.Module):
 
         # +1 for a time-like feature derived from durations.
         self.input_channels = self.channels + 1
-        self.func = CDEFunc(self.input_channels, self.hidden_channels)
+        self.func = CDEFunc(self.input_channels, self.hidden_channels, num_layers=num_layers)
         self.initial = nn.Linear(self.input_channels, self.hidden_channels)
         self.readout = nn.Linear(self.hidden_channels, self.channels)
 
@@ -121,12 +131,14 @@ class NeuralCDE(nn.Module):
         if c != self.channels:
             raise ValueError(f"Expected x with {self.channels} channels, got {c}")
 
-        mask_t = mask[:, 0, :].to(dtype=x.dtype)
-        x_t = x.transpose(1, 2)  # (b, t, c)
+        out_dtype = x.dtype
+        compute_dtype = torch.float32
+        mask_t = mask[:, 0, :].to(dtype=compute_dtype)
+        x_t = x.transpose(1, 2).to(dtype=compute_dtype)  # (b, t, c)
 
         if durations is None:
             # Use an index-like channel, normalized to [0, 1] per batch.
-            dt = torch.ones((b, t), device=x.device, dtype=x.dtype)
+            dt = torch.ones((b, t), device=x.device, dtype=compute_dtype)
         else:
             if durations.ndim == 3:
                 durations = durations[:, 0, :]
@@ -134,7 +146,7 @@ class NeuralCDE(nn.Module):
                 raise ValueError(
                     f"Expected durations to have shape (batch, length) or (batch, 1, length)"
                 )
-            dt = durations.to(device=x.device, dtype=x.dtype)
+            dt = durations.to(device=x.device, dtype=compute_dtype)
 
         # Build a cumulative time-like feature and normalise per example.
         dt = dt * mask_t
@@ -148,49 +160,54 @@ class NeuralCDE(nn.Module):
         path = torch.cat([x_t, tau], dim=-1)
         path = _fill_forward(path, mask_t)
 
-        if self.interpolation == "linear":
-            coeffs = torchcde.linear_interpolation_coeffs(path)
-            X = torchcde.LinearInterpolation(coeffs)
-        else:
-            coeffs = torchcde.natural_cubic_spline_coeffs(path)
-            X = torchcde.NaturalCubicSpline(coeffs)
-
-        # z0 from the first observation.
-        x0 = X.evaluate(X.interval[0])
-        z0 = self.initial(x0)
-
-        # Produce an output for every token index (shared across the batch).
-        t_grid = torch.linspace(
-            float(X.interval[0]),
-            float(X.interval[1]),
-            t,
-            device=x.device,
-            dtype=x.dtype,
+        autocast_ctx = (
+            torch.autocast(device_type="cuda", enabled=False)
+            if x.is_cuda
+            else torch.autocast(device_type="cpu", enabled=False)
         )
-        solver = self.solver
-        backend = None
+        with autocast_ctx:
+            if self.interpolation == "linear":
+                coeffs = torchcde.linear_interpolation_coeffs(path)
+                X = torchcde.LinearInterpolation(coeffs)
+            else:
+                coeffs = torchcde.natural_cubic_spline_coeffs(path)
+                X = torchcde.NaturalCubicSpline(coeffs)
 
-        cdeint_kwargs = dict(
-            X=X,
-            z0=z0,
-            func=self.func,
-            t=t_grid,
-            method=solver,
-            atol=self.atol,
-            rtol=self.rtol,
-        )
-        if solver == "reversible_heun":
-            backend = "torchsde"
-            # torchsde.sdeint expects `dt` as a top-level kwarg.
-            cdeint_kwargs["dt"] = self.dt
-        else:
-            # torchdiffeq odeint-style solvers take step size via `options`.
-            cdeint_kwargs["options"] = {"step_size": self.dt}
-        if backend is not None:
-            cdeint_kwargs["backend"] = backend
+            # z0 from the first observation.
+            x0 = X.evaluate(X.interval[0])
+            z0 = self.initial(x0)
 
-        z_t = torchcde.cdeint(**cdeint_kwargs)  # (b, t, hidden)
+            # Produce an output for every token index (shared across the batch).
+            t_grid = torch.linspace(
+                float(X.interval[0]),
+                float(X.interval[1]),
+                t,
+                device=x.device,
+                dtype=compute_dtype,
+            )
+            solver = self.solver
+            backend = None
 
-        y_t = self.readout(z_t)  # (b, t, c)
-        y = y_t.transpose(1, 2)
-        return y * mask
+            cdeint_kwargs = dict(
+                X=X,
+                z0=z0,
+                func=self.func,
+                t=t_grid,
+                method=solver,
+                atol=self.atol,
+                rtol=self.rtol,
+            )
+            if solver == "reversible_heun":
+                backend = "torchsde"
+                # torchsde.sdeint expects `dt` as a top-level kwarg.
+                cdeint_kwargs["dt"] = self.dt
+            else:
+                # torchdiffeq odeint-style solvers take step size via `options`.
+                cdeint_kwargs["options"] = {"step_size": self.dt}
+            if backend is not None:
+                cdeint_kwargs["backend"] = backend
+
+            z_t = torchcde.cdeint(**cdeint_kwargs)  # (b, t, hidden)
+            y_t = self.readout(z_t)  # (b, t, c)
+        y = y_t.transpose(1, 2).to(dtype=out_dtype)
+        return y * mask.to(dtype=out_dtype)

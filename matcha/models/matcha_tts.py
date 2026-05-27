@@ -79,6 +79,7 @@ class MatchaTTS(BaseLightningClass):  # 🍵
                 hidden_channels=cde.hidden_channels,
                 interpolation=getattr(cde, "interpolation", "linear"),
                 solver=getattr(cde, "solver", "reversible_heun"),
+                num_layers=getattr(cde, "num_layers", 2),
                 dt=getattr(cde, "dt", 0.01),
                 atol=getattr(cde, "atol", 1e-5),
                 rtol=getattr(cde, "rtol", 1e-5),
@@ -143,20 +144,17 @@ class MatchaTTS(BaseLightningClass):  # 🍵
         attn_mask = x_mask.unsqueeze(-1) * y_mask.unsqueeze(2)
         attn = generate_path(w_ceil.squeeze(1), attn_mask.squeeze(1)).unsqueeze(1)
 
-        # Align encoded text and get mu_y
-        mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2))
+        mu_x_for_alignment = mu_x
+        if self.cde is not None:
+            mu_x_for_alignment = self.cde(mu_x, x_mask, durations=torch.exp(logw).squeeze(1))
+
+        # Align encoded text (optionally CDE-conditioned) and get mu_y
+        mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x_for_alignment.transpose(1, 2))
         mu_y = mu_y.transpose(1, 2)
         encoder_outputs = mu_y[:, :, :y_max_length]
 
-        mu_y_for_decoder = mu_y
-        if self.cde is not None:
-            durations_y = torch.matmul(
-                attn.squeeze(1).transpose(1, 2), torch.exp(logw).transpose(1, 2)
-            ).transpose(1, 2)
-            mu_y_for_decoder = self.cde(mu_y, y_mask, durations=durations_y.squeeze(1))
-
         # Generate sample tracing the probability flow
-        decoder_outputs = self.decoder(mu_y_for_decoder, y_mask, n_timesteps, temperature, spks)
+        decoder_outputs = self.decoder(mu_y, y_mask, n_timesteps, temperature, spks)
         decoder_outputs = decoder_outputs[:, :, :y_max_length]
 
         t = (dt.datetime.now() - t).total_seconds()
@@ -250,24 +248,18 @@ class MatchaTTS(BaseLightningClass):  # 🍵
             y = y_cut
             y_mask = y_cut_mask
 
+        mu_x_for_alignment = mu_x
+        if self.cde is not None:
+            mu_x_for_alignment = self.cde(mu_x, x_mask, durations=torch.exp(logw_).squeeze(1))
+
         # Align encoded text with mel-spectrogram and get mu_y segment
-        mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2))
+        mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x_for_alignment.transpose(1, 2))
         mu_y = mu_y.transpose(1, 2)
 
-        mu_y_for_decoder = mu_y
-        if self.cde is not None:
-            durations_y = torch.matmul(
-                attn.squeeze(1).transpose(1, 2), torch.exp(logw_).transpose(1, 2)
-            ).transpose(1, 2)
-            mu_y_for_decoder = self.cde(mu_y, y_mask, durations=durations_y.squeeze(1))
-
         # Compute loss of the decoder
-        diff_loss, _ = self.decoder.compute_loss(x1=y, mask=y_mask, mu=mu_y_for_decoder, spks=spks, cond=cond)
+        diff_loss, _ = self.decoder.compute_loss(x1=y, mask=y_mask, mu=mu_y, spks=spks, cond=cond)
 
-        if self.prior_loss:
-            prior_loss = torch.sum(0.5 * ((y - mu_y) ** 2 + math.log(2 * math.pi)) * y_mask)
-            prior_loss = prior_loss / (torch.sum(y_mask) * self.n_feats)
-        else:
-            prior_loss = 0
+        # Mocha-TTS finetuning objective does not use prior loss.
+        prior_loss = torch.zeros((), device=y.device, dtype=diff_loss.dtype)
 
         return dur_loss, prior_loss, diff_loss, attn

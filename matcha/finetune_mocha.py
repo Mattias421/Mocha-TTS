@@ -71,14 +71,13 @@ def _finetune_losses(model: LightningModule, batch: Dict[str, torch.Tensor]) -> 
             attn = monotonic_align.maximum_path(log_prior, attn_mask.squeeze(1)).detach()
             logw_used = torch.log(1e-8 + torch.sum(attn.unsqueeze(1), -1)) * x_mask
 
-        mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x.transpose(1, 2)).transpose(1, 2)
+        mu_x_for_alignment = mu_x
+        if model.cde is not None:
+            mu_x_for_alignment = model.cde(mu_x, x_mask, durations=torch.exp(logw_used).squeeze(1))
 
-    mu_y_for_decoder = mu_y
-    if model.cde is not None:
-        durations_y = torch.matmul(attn.squeeze(1).transpose(1, 2), torch.exp(logw_used).transpose(1, 2)).transpose(1, 2)
-        mu_y_for_decoder = model.cde(mu_y, y_mask, durations=durations_y.squeeze(1))
+        mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x_for_alignment.transpose(1, 2)).transpose(1, 2)
 
-    diff_loss, _ = model.decoder.compute_loss(x1=y, mask=y_mask, mu=mu_y_for_decoder, spks=spks, cond=None)
+    diff_loss, _ = model.decoder.compute_loss(x1=y, mask=y_mask, mu=mu_y, spks=spks, cond=None)
     zero = torch.zeros((), device=diff_loss.device, dtype=diff_loss.dtype)
     return {"dur_loss": zero, "prior_loss": zero, "diff_loss": diff_loss}
 
