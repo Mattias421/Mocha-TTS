@@ -38,16 +38,10 @@ You can also [try 🍵 Matcha-TTS in your browser on HuggingFace 🤗 spaces](ht
 
 ## Installation
 
-1. Create an environment (suggested but optional)
-
-```
-conda create -n matcha-tts python=3.10 -y
-conda activate matcha-tts
-```
 
 2. Install Matcha TTS using pip or from source (for development this is the best option)
 
-
+There's probably an env that can be accessed at `$EXP/Mocha-TTS/.venv`
 from source
 
 ```bash
