@@ -52,12 +52,14 @@ class CDEFunc(torch.nn.Module):
 
     def forward(self, t, z):
         # z has shape (batch, hidden_channels)
+        input_dtype = z.dtype
+        z = z.to(self.linear1.weight.dtype)
         z = self.linear1(z)
         z = z.relu()
         z = self.linear2(z)
         z = z.tanh()
         z = z.view(z.size(0), self.hidden_channels, self.input_channels)
-        return z
+        return z.to(input_dtype)
 
 
 class NeuralCDE(nn.Module):
