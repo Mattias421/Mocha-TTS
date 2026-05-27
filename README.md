@@ -179,6 +179,30 @@ python matcha/train.py experiment=ljspeech trainer.devices=[0,1]
 matcha-tts --text "<INPUT TEXT>" --checkpoint_path <PATH TO CHECKPOINT>
 ```
 
+
+### Enable CDE during training
+
+`MatchaTTS` can optionally refine aligned encoder states with a `NeuralCDE` before the decoder.
+To enable it, pass a `cde` config override when launching training.
+
+Example (inline overrides):
+
+```bash
+python matcha/train.py experiment=ljspeech \
+  model.cde.enabled=true \
+  model.cde.hidden_channels=128 \
+  model.cde.interpolation=linear \
+  model.cde.solver=reversible_heun \
+  model.cde.dt=0.01 \
+  model.cde.atol=1e-5 \
+  model.cde.rtol=1e-5
+```
+
+Notes:
+- `model.cde.enabled=true` turns CDE on. If `model.cde` is omitted, baseline behavior is unchanged.
+- CDE modifies only the decoder input (`mu_y` -> CDE -> decoder); prior loss still uses original aligned `mu_y`.
+- The default CDE solver is `reversible_heun` with `dt=0.01`.
+
 ## ONNX support
 
 > Special thanks to [@mush42](https://github.com/mush42) for implementing ONNX export and inference support.

@@ -40,13 +40,15 @@ def _fill_forward(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
 
 
 class CDEFunc(torch.nn.Module):
-    def __init__(self, input_channels, hidden_channels):
+    def __init__(self, input_channels, hidden_channels, width=None):
         super(CDEFunc, self).__init__()
         self.input_channels = input_channels
         self.hidden_channels = hidden_channels
 
-        self.linear1 = torch.nn.Linear(hidden_channels, 128)
-        self.linear2 = torch.nn.Linear(128, input_channels * hidden_channels)
+        self.width = int(width) if width is not None else int(hidden_channels) * 2
+
+        self.linear1 = torch.nn.Linear(hidden_channels, self.width)
+        self.linear2 = torch.nn.Linear(self.width, input_channels * hidden_channels)
 
     def forward(self, t, z):
         # z has shape (batch, hidden_channels)
@@ -78,7 +80,8 @@ class NeuralCDE(nn.Module):
         hidden_channels: int,
         *,
         interpolation: str = "linear",
-        solver: str = "rk4",
+        solver: str = "reversible_heun",
+        dt: float = 0.01,
         atol: float = 1e-5,
         rtol: float = 1e-5,
     ):
@@ -96,6 +99,7 @@ class NeuralCDE(nn.Module):
 
         self.interpolation = interpolation
         self.solver = solver
+        self.dt = float(dt)
         self.atol = float(atol)
         self.rtol = float(rtol)
 
@@ -161,15 +165,20 @@ class NeuralCDE(nn.Module):
             device=x.device,
             dtype=x.dtype,
         )
-        z_t = torchcde.cdeint(
+        cdeint_kwargs = dict(
             X=X,
             z0=z0,
             func=self.func,
             t=t_grid,
             method=self.solver,
+            options={"step_size": self.dt},
             atol=self.atol,
             rtol=self.rtol,
-        )  # (b, t, hidden)
+        )
+        if self.solver == "reversible_heun":
+            cdeint_kwargs["backend"] = "torchsde"
+
+        z_t = torchcde.cdeint(**cdeint_kwargs)  # (b, t, hidden)
 
         y_t = self.readout(z_t)  # (b, t, c)
         y = y_t.transpose(1, 2)
