@@ -2,7 +2,7 @@ import pytest
 import torch
 import torchcde
 
-from matcha.models.components.cde import NeuralCDE, _fill_forward
+from matcha.models.components.cde import NeuralCDE, _compute_tau_from_dt, _fill_forward
 
 
 def _make_mask(lengths: torch.Tensor, max_len: int) -> torch.Tensor:
@@ -82,3 +82,24 @@ def test_cde_validates_input_shapes():
 
     with pytest.raises(ValueError, match="Expected durations"):
         model(x, mask, durations=torch.ones(2, 1, 1, 5))
+
+
+def test_compute_tau_utterance_and_global_modes():
+    dt = torch.tensor([[1.0, 1.0, 2.0, 0.0], [2.0, 2.0, 0.0, 0.0]])
+    mask = torch.tensor([[1.0, 1.0, 1.0, 0.0], [1.0, 1.0, 0.0, 0.0]])
+
+    tau_utterance = _compute_tau_from_dt(dt, mask, mode="utterance")
+    assert torch.allclose(tau_utterance[0, 2], torch.tensor(1.0))
+    assert torch.allclose(tau_utterance[1, 1], torch.tensor(1.0))
+
+    tau_global = _compute_tau_from_dt(dt, mask, mode="global", global_value=1024.0)
+    assert torch.allclose(tau_global[0, 2], torch.tensor(4.0 / 1024.0))
+    assert torch.allclose(tau_global[1, 1], torch.tensor(4.0 / 1024.0))
+
+
+def test_cde_validates_time_norm_config():
+    with pytest.raises(ValueError, match="Unknown time_norm_mode"):
+        NeuralCDE(channels=2, hidden_channels=4, time_norm_mode="bad")
+
+    with pytest.raises(ValueError, match="time_norm_value > 0"):
+        NeuralCDE(channels=2, hidden_channels=4, time_norm_mode="global", time_norm_value=0.0)

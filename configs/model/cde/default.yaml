@@ -3,6 +3,8 @@ hidden_channels: 64
 interpolation: linear
 solver: reversible_heun
 num_layers: 2
+time_norm_mode: utterance
+time_norm_value: 1024.0
 dt: 0.01
 atol: 1e-5
 rtol: 1e-5

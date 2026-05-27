@@ -39,6 +39,33 @@ def _fill_forward(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     return torch.where(pad, last.expand(b, t, c), x)
 
 
+def _compute_tau_from_dt(
+    dt: torch.Tensor, mask: torch.Tensor, mode: str = "utterance", global_value: float = 1024.0
+) -> torch.Tensor:
+    """Build normalised cumulative time feature from per-step increments.
+
+    Args:
+        dt: Tensor of shape (batch, length).
+        mask: Tensor of shape (batch, length) with 1 for valid tokens.
+        mode: One of {"utterance", "global"}.
+        global_value: Denominator used when mode == "global".
+    """
+    if mode not in {"utterance", "global"}:
+        raise ValueError(f"Unknown mode '{mode}'")
+    if mode == "global" and global_value <= 0.0:
+        raise ValueError(f"Expected global_value > 0, got {global_value}")
+
+    b = dt.shape[0]
+    dt = dt * mask
+    tau = torch.cumsum(dt, dim=1)
+    if mode == "utterance":
+        last_valid = ((mask.sum(1).to(torch.long).clamp(min=1) - 1).clamp(min=0)).view(b, 1)
+        denom = tau.gather(1, last_valid).clamp(min=1e-6)
+    else:
+        denom = torch.full((b, 1), float(global_value), dtype=dt.dtype, device=dt.device)
+    return tau / denom
+
+
 class CDEFunc(torch.nn.Module):
     def __init__(self, input_channels, hidden_channels, width=None, num_layers: int = 2):
         super(CDEFunc, self).__init__()
@@ -93,6 +120,8 @@ class NeuralCDE(nn.Module):
         interpolation: str = "linear",
         solver: str = "reversible_heun",
         num_layers: int = 2,
+        time_norm_mode: str = "utterance",
+        time_norm_value: float = 1024.0,
         dt: float = 0.01,
         atol: float = 1e-5,
         rtol: float = 1e-5,
@@ -111,6 +140,12 @@ class NeuralCDE(nn.Module):
 
         self.interpolation = interpolation
         self.solver = solver
+        if time_norm_mode not in {"utterance", "global"}:
+            raise ValueError(f"Unknown time_norm_mode '{time_norm_mode}'")
+        self.time_norm_mode = str(time_norm_mode)
+        self.time_norm_value = float(time_norm_value)
+        if self.time_norm_mode == "global" and self.time_norm_value <= 0.0:
+            raise ValueError(f"Expected time_norm_value > 0 for global mode, got {self.time_norm_value}")
         self.dt = float(dt)
         self.atol = float(atol)
         self.rtol = float(rtol)
@@ -148,14 +183,13 @@ class NeuralCDE(nn.Module):
                 )
             dt = durations.to(device=x.device, dtype=compute_dtype)
 
-        # Build a cumulative time-like feature and normalise per example.
-        dt = dt * mask_t
-        tau = torch.cumsum(dt, dim=1)
-        last_valid = (
-            (mask_t.sum(1).to(torch.long).clamp(min=1) - 1).clamp(min=0).view(b, 1)
-        )
-        denom = tau.gather(1, last_valid).clamp(min=1e-6)
-        tau = (tau / denom).unsqueeze(-1)  # (b, t, 1)
+        # Build a cumulative time-like feature and normalise.
+        tau = _compute_tau_from_dt(
+            dt=dt,
+            mask=mask_t,
+            mode=self.time_norm_mode,
+            global_value=self.time_norm_value,
+        ).unsqueeze(-1)  # (b, t, 1)
 
         path = torch.cat([x_t, tau], dim=-1)
         path = _fill_forward(path, mask_t)
