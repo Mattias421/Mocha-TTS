@@ -3,6 +3,7 @@ defaults:
   - encoder: default.yaml
   - decoder: default.yaml
   - cfm: default.yaml
+  - cde: default.yaml
   - optimizer: adam.yaml
 
 _target_: matcha.models.matcha_tts.MatchaTTS
