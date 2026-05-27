@@ -179,10 +179,10 @@ class BaseLightningClass(LightningModule, ABC):
                 for i in range(2):
                     y = one_batch["y"][i].unsqueeze(0).to(self.device)
                     _log_image(
+                        self.logger,
                         f"original/{i}",
                         plot_tensor(y.squeeze().cpu()),
                         self.current_epoch,
-                        dataformats="HWC",
                     )
 
             log.debug("Synthesising...")
@@ -194,22 +194,22 @@ class BaseLightningClass(LightningModule, ABC):
                 y_enc, y_dec = output["encoder_outputs"], output["decoder_outputs"]
                 attn = output["attn"]
                 _log_image(
+                    self.logger,
                     f"generated_enc/{i}",
                     plot_tensor(y_enc.squeeze().cpu()),
                     self.current_epoch,
-                    dataformats="HWC",
                 )
                 _log_image(
+                    self.logger,
                     f"generated_dec/{i}",
                     plot_tensor(y_dec.squeeze().cpu()),
                     self.current_epoch,
-                    dataformats="HWC",
                 )
                 _log_image(
+                    self.logger,
                     f"alignment/{i}",
                     plot_tensor(attn.squeeze().cpu()),
                     self.current_epoch,
-                    dataformats="HWC",
                 )
 
     def on_before_optimizer_step(self, optimizer):
