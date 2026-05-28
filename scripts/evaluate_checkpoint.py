@@ -19,6 +19,7 @@ from matcha.cli import (
     process_text,
     to_waveform,
 )
+from matcha.models.matcha_tts import MatchaTTS
 from matcha.utils.utils import assert_model_downloaded, get_user_data_dir
 
 
@@ -53,7 +54,62 @@ def resolve_model_ckpt(args: argparse.Namespace) -> tuple[str, str]:
 
     if args.checkpoint_path is None:
         raise ValueError("Either --checkpoint_path or --use_official_ckpt must be provided.")
-    return "custom_model", args.checkpoint_path
+    ckpt_path = resolve_checkpoint_path(Path(args.checkpoint_path))
+    return "custom_model", str(ckpt_path)
+
+
+def resolve_checkpoint_path(path: Path) -> Path:
+    if path.is_file():
+        return path
+    if path.is_dir():
+        candidates = [path / "checkpoints" / "last.ckpt", path / "last.ckpt"]
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+        ckpt_glob = sorted((path / "checkpoints").glob("checkpoint_*.ckpt"))
+        if ckpt_glob:
+            return ckpt_glob[-1]
+    raise FileNotFoundError(f"Could not resolve checkpoint file from: {path}")
+
+
+def _remap_legacy_cde_keys(state_dict: dict[str, torch.Tensor]) -> tuple[dict[str, torch.Tensor], int]:
+    remapped = dict(state_dict)
+    mapping = {
+        "cde.func.linear1.weight": "cde.func.hidden_layers.0.weight",
+        "cde.func.linear1.bias": "cde.func.hidden_layers.0.bias",
+        "cde.func.linear2.weight": "cde.func.out.weight",
+        "cde.func.linear2.bias": "cde.func.out.bias",
+    }
+    n = 0
+    for src, dst in mapping.items():
+        if src in remapped and dst not in remapped:
+            remapped[dst] = remapped.pop(src)
+            n += 1
+    return remapped, n
+
+
+def load_custom_matcha_with_fallback(ckpt_path: str, device: torch.device):
+    try:
+        return load_matcha("custom_model", ckpt_path, device)
+    except RuntimeError as exc:
+        if "cde.func.hidden_layers.0.weight" not in str(exc):
+            raise
+
+    print("[!] Detected legacy CDE checkpoint format. Applying key remap fallback...")
+    checkpoint = torch.load(ckpt_path, map_location="cpu")
+    hparams = checkpoint.get("hyper_parameters")
+    if hparams is None:
+        raise ValueError("Checkpoint is missing 'hyper_parameters'; cannot construct MatchaTTS for fallback load.")
+
+    model = MatchaTTS(**hparams)
+    state_dict = checkpoint["state_dict"]
+    remapped_state_dict, n_remapped = _remap_legacy_cde_keys(state_dict)
+    print(f"[!] Remapped {n_remapped} legacy CDE parameter keys.")
+    model.load_state_dict(remapped_state_dict, strict=True)
+    model = model.to(device)
+    model.eval()
+    print("[+] custom_model loaded with legacy CDE fallback!")
+    return model
 
 
 def resolve_vocoder(args: argparse.Namespace, model_name: str) -> tuple[str, str]:
@@ -132,6 +188,22 @@ def run_metric_script(script: Path, gen_dir: Path, gt_dir: Path, out_dir: Path, 
         ) from exc
 
 
+def run_mcd_v2_script(script: Path, gen_dir: Path, gt_dir: Path):
+    cmd = [
+        ".venv/bin/python",
+        str(script),
+        str(gt_dir),
+        str(gen_dir),
+    ]
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"Metric script failed: {' '.join(cmd)}. "
+            "Ensure evaluation deps are installed (e.g. pysptk, pyworld, fastdtw)."
+        ) from exc
+
+
 def parse_avg_result(path: Path) -> str:
     if not path.exists():
         return ""
@@ -155,7 +227,10 @@ def main():
     if len(entries) == 0:
         raise ValueError("No utterances found in filelist.")
 
-    model = load_matcha(model_name, ckpt_path, device)
+    if model_name == "custom_model":
+        model = load_custom_matcha_with_fallback(ckpt_path, device)
+    else:
+        model = load_matcha(model_name, ckpt_path, device)
     vocoder, denoiser = load_vocoder(vocoder_name, vocoder_path, device)
 
     generate_wavs(
@@ -177,7 +252,8 @@ def main():
         if not target.exists():
             target.symlink_to(Path(wav_path).resolve())
 
-    run_metric_script(Path("scripts/evaluate_mcd.py"), gen_dir, gt_dir, mcd_out, args.mcd_nj)
+    mcd_out.mkdir(parents=True, exist_ok=True)
+    run_mcd_v2_script(Path("scripts/evaluate_mcd_v2.py"), gen_dir, gt_dir)
     run_metric_script(Path("scripts/evaluate_f0.py"), gen_dir, gt_dir, f0_out, args.f0_nj)
 
     summary = {
@@ -187,7 +263,7 @@ def main():
         "device": str(device),
         "num_utts": len(entries),
         "steps": args.steps,
-        "mcd": parse_avg_result(mcd_out / "mcd_avg_result.txt"),
+        "mcd": parse_avg_result(gen_dir / "evaluation_results.txt"),
         "log_f0_rmse": parse_avg_result(f0_out / "log_f0_rmse_avg_result.txt"),
     }
     outdir.mkdir(parents=True, exist_ok=True)
