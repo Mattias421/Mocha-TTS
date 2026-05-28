@@ -19,7 +19,9 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 log = utils.get_pylogger(__name__)
 
 
-def _load_matcha_components(model: LightningModule, model_name: str = "matcha_ljspeech") -> str:
+def _load_matcha_components(
+    model: LightningModule, model_name: str = "matcha_ljspeech", freeze_decoder: bool = False
+) -> str:
     save_dir = get_user_data_dir()
     ckpt_path = save_dir / f"{model_name}.ckpt"
     assert_model_downloaded(ckpt_path, MATCHA_URLS[model_name])
@@ -40,8 +42,18 @@ def _load_matcha_components(model: LightningModule, model_name: str = "matcha_lj
     model.load_state_dict(model_state, strict=False)
     for param in model.encoder.parameters():
         param.requires_grad = False
+    if freeze_decoder:
+        for param in model.decoder.parameters():
+            param.requires_grad = False
+        if model.cde is not None:
+            for param in model.cde.parameters():
+                param.requires_grad = True
 
-    log.info(f"Loaded {loaded} encoder/decoder tensors from {ckpt_path}; skipped {skipped}.")
+    n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    log.info(
+        f"Loaded {loaded} encoder/decoder tensors from {ckpt_path}; skipped {skipped}. "
+        f"Trainable parameters after freezing: {n_trainable}."
+    )
     return str(ckpt_path)
 
 
@@ -71,11 +83,11 @@ def _finetune_losses(model: LightningModule, batch: Dict[str, torch.Tensor]) -> 
             attn = monotonic_align.maximum_path(log_prior, attn_mask.squeeze(1)).detach()
             logw_used = torch.log(1e-8 + torch.sum(attn.unsqueeze(1), -1)) * x_mask
 
-        mu_x_for_alignment = mu_x
-        if model.cde is not None:
-            mu_x_for_alignment = model.cde(mu_x, x_mask, durations=torch.exp(logw_used).squeeze(1))
+    mu_x_for_alignment = mu_x
+    if model.cde is not None:
+        mu_x_for_alignment = model.cde(mu_x, x_mask, durations=torch.exp(logw_used).squeeze(1))
 
-        mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x_for_alignment.transpose(1, 2)).transpose(1, 2)
+    mu_y = torch.matmul(attn.squeeze(1).transpose(1, 2), mu_x_for_alignment.transpose(1, 2)).transpose(1, 2)
 
     diff_loss, _ = model.decoder.compute_loss(x1=y, mask=y_mask, mu=mu_y, spks=spks, cond=None)
     zero = torch.zeros((), device=diff_loss.device, dtype=diff_loss.dtype)
@@ -94,7 +106,8 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     model: LightningModule = hydra.utils.instantiate(cfg.model)
 
     matcha_name = cfg.get("pretrained_matcha_name", "matcha_ljspeech")
-    ckpt = _load_matcha_components(model, matcha_name)
+    freeze_decoder = bool(cfg.get("freeze_decoder", False))
+    ckpt = _load_matcha_components(model, matcha_name, freeze_decoder=freeze_decoder)
     log.info(f"Using pretrained Matcha checkpoint: {ckpt}")
     model.get_losses = lambda batch: _finetune_losses(model, batch)
 

@@ -9,3 +9,4 @@ defaults:
 
 task_name: "finetune_mocha"
 run_name: "default"
+freeze_decoder: false

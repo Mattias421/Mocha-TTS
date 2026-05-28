@@ -34,7 +34,10 @@ class BaseLightningClass(LightningModule, ABC):
         self.register_buffer("mel_std", torch.tensor(data_statistics["mel_std"]))
 
     def configure_optimizers(self) -> Any:
-        optimizer = self.hparams.optimizer(params=self.parameters())
+        trainable_params = [p for p in self.parameters() if p.requires_grad]
+        if len(trainable_params) == 0:
+            raise RuntimeError("No trainable parameters found when configuring optimizer.")
+        optimizer = self.hparams.optimizer(params=trainable_params)
         if self.hparams.scheduler not in (None, {}):
             scheduler_args = {}
             # Manage last epoch for exponential schedulers
