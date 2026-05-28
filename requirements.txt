@@ -45,3 +45,6 @@ seaborn
 
 # --------- Neural DE's --------- #
 torchcde
+pysptk
+fastdtw
+pyworld
