@@ -26,7 +26,10 @@ def _load_matcha_components(
     ckpt_path = save_dir / f"{model_name}.ckpt"
     assert_model_downloaded(ckpt_path, MATCHA_URLS[model_name])
 
-    checkpoint = torch.load(ckpt_path, map_location="cpu")
+    # PyTorch >=2.6 defaults to weights_only=True, which can fail for
+    # checkpoints that include OmegaConf objects in metadata.
+    # This pretrained Matcha checkpoint is a trusted source.
+    checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     pretrained_state = checkpoint["state_dict"] if "state_dict" in checkpoint else checkpoint
 
     model_state = model.state_dict()
