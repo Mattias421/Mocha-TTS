@@ -143,6 +143,7 @@ class NeuralCDE(nn.Module):
         interpolation: str = "linear",
         solver: str = "reversible_heun",
         num_layers: int = 2,
+        readout_type: str = "unet",
         time_norm_mode: str = "utterance",
         time_norm_value: float = 1024.0,
         dt: float = 0.01,
@@ -158,6 +159,9 @@ class NeuralCDE(nn.Module):
         # +1 for a time-like feature derived from durations.
         self.interpolation = interpolation
         self.solver = solver
+        if readout_type not in {"unet", "linear"}:
+            raise ValueError(f"Unknown readout_type '{readout_type}'")
+        self.readout_type = str(readout_type)
         if time_norm_mode not in {"utterance", "global"}:
             raise ValueError(f"Unknown time_norm_mode '{time_norm_mode}'")
         self.time_norm_mode = str(time_norm_mode)
@@ -176,11 +180,16 @@ class NeuralCDE(nn.Module):
             mid_channels=self.hidden_channels,
             out_channels=self.hidden_channels,
         )
-        self.readout_unet = UNet1D(
-            in_channels=self.hidden_channels,
-            mid_channels=self.hidden_channels,
-            out_channels=self.channels,
-        )
+        if self.readout_type == "unet":
+            self.readout_unet = UNet1D(
+                in_channels=self.hidden_channels,
+                mid_channels=self.hidden_channels,
+                out_channels=self.channels,
+            )
+            self.readout_linear = None
+        else:
+            self.readout_unet = None
+            self.readout_linear = nn.Linear(self.hidden_channels, self.channels)
 
     def forward(
         self, x: torch.Tensor, mask: torch.Tensor, durations: torch.Tensor | None = None
@@ -277,7 +286,11 @@ class NeuralCDE(nn.Module):
                 cdeint_kwargs["backend"] = backend
 
             z_t = torchcde.cdeint(**cdeint_kwargs)  # (b, t, hidden)
-            z_seq = z_t.transpose(1, 2)  # (b, hidden, t)
-            y = self.readout_unet(z_seq, mask_t.unsqueeze(1))  # (b, c, t)
+            if self.readout_type == "unet":
+                z_seq = z_t.transpose(1, 2)  # (b, hidden, t)
+                y = self.readout_unet(z_seq, mask_t.unsqueeze(1))  # (b, c, t)
+            else:
+                y_t = self.readout_linear(z_t)  # (b, t, c)
+                y = y_t.transpose(1, 2)  # (b, c, t)
         y = y.to(dtype=out_dtype)
         return y * mask.to(dtype=out_dtype)

@@ -80,6 +80,7 @@ class MatchaTTS(BaseLightningClass):  # 🍵
                 interpolation=getattr(cde, "interpolation", "linear"),
                 solver=getattr(cde, "solver", "reversible_heun"),
                 num_layers=getattr(cde, "num_layers", 2),
+                readout_type=getattr(cde, "readout_type", "unet"),
                 time_norm_mode=getattr(cde, "time_norm_mode", "utterance"),
                 time_norm_value=getattr(cde, "time_norm_value", 1024.0),
                 dt=getattr(cde, "dt", 0.01),

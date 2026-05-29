@@ -68,6 +68,20 @@ def test_cde_accepts_no_durations():
     assert y.shape == x.shape
 
 
+def test_cde_linear_readout_path():
+    torch.manual_seed(0)
+    b, c, t = 2, 4, 6
+    lengths = torch.tensor([6, 4])
+    mask = _make_mask(lengths, t)
+    x = torch.randn(b, c, t, requires_grad=True)
+
+    model = NeuralCDE(channels=c, hidden_channels=8, readout_type="linear")
+    y = model(x, mask, durations=None)
+    assert y.shape == x.shape
+    y.mean().backward()
+    assert x.grad is not None
+
+
 def test_cde_validates_input_shapes():
     model = NeuralCDE(channels=2, hidden_channels=4)
 
@@ -103,3 +117,6 @@ def test_cde_validates_time_norm_config():
 
     with pytest.raises(ValueError, match="time_norm_value > 0"):
         NeuralCDE(channels=2, hidden_channels=4, time_norm_mode="global", time_norm_value=0.0)
+
+    with pytest.raises(ValueError, match="Unknown readout_type"):
+        NeuralCDE(channels=2, hidden_channels=4, readout_type="bad")

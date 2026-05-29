@@ -3,6 +3,7 @@ hidden_channels: 64
 interpolation: linear
 solver: reversible_heun
 num_layers: 2
+readout_type: unet
 time_norm_mode: utterance
 time_norm_value: 1024.0
 dt: 1
