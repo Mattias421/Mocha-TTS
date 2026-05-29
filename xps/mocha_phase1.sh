@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=mocha_phase1
 #SBATCH --time=96:00:00
-#SBATCH --cpus-per-task=1
+#SBATCH --cpus-per-task=2
 #SBATCH --mem=64G
 #SBATCH --output=logs/mocha_phase1_%a.out
 #SBATCH --partition=gpu,gpu-h100,gpu-h100-nvl
