@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-module load eSpeak-NG/1.51-gfbf-2023a
+module load eSpeak-NG
 ml CUDA/12.4.0
 
 source .venv/bin/activate
