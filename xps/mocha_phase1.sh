@@ -56,10 +56,9 @@ run_name="phase1_lr${lr}_dt${dt}_frz${freeze}_tn${time_norm}_id${SLURM_ARRAY_TAS
 echo "Running ${run_name}"
 echo "freeze_decoder=${freeze} lr=${lr} dt=${dt} time_norm_mode=${time_norm}"
 
-export WANDB_TAGS="mocha_phase1,lr_${lr},dt_${dt},freeze_${freeze},tn_${time_norm}"
-
 python matcha/finetune_mocha.py \
   run_name="${run_name}" \
+  logger.wandb.tags=[mocha_phase1,lr_${lr},dt_${dt},freeze_${freeze},tn_${time_norm}] \
   model.cde.enabled=true \
   freeze_decoder="${freeze}" \
   model.optimizer.lr="${lr}" \

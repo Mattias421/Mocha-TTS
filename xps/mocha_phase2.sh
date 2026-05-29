@@ -59,10 +59,9 @@ run_name="phase2_lr${lr}_h${hidden}_s${seed}_frz${freeze}_dt${dt}_tn${time_norm}
 
 echo "Running ${run_name}"
 
-export WANDB_TAGS="mocha_phase2,lr_${lr},hidden_${hidden},seed_${seed},freeze_${freeze},dt_${dt},tn_${time_norm}"
-
 python matcha/finetune_mocha.py \
   run_name="${run_name}" \
+  logger.wandb.tags=[mocha_phase2,lr_${lr},hidden_${hidden},seed_${seed},freeze_${freeze},dt_${dt},tn_${time_norm}] \
   seed="${seed}" \
   model.cde.enabled=true \
   freeze_decoder="${freeze}" \
