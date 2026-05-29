@@ -11,7 +11,9 @@
 
 set -euo pipefail
 
-module load eSpeak-NG/1.51-gfbf-2023a
+module load eSpeak-NG
+module load libsndfile
+module load OpenBLAS
 ml CUDA/12.4.0
 
 source .venv/bin/activate
@@ -67,5 +69,4 @@ python matcha/finetune_mocha.py \
   model.cde.dt="${dt}" \
   model.cde.time_norm_mode="${time_norm}" \
   model.cde.time_norm_value=1024 \
-  trainer.max_steps=101 \
-  +trainer.limit_val_batches=8
+  trainer.max_epochs=101 \
