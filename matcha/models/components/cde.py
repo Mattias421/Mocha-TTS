@@ -103,11 +103,21 @@ class UNet1D(nn.Module):
 
 
 class CDEFunc(torch.nn.Module):
-    def __init__(self, input_channels, hidden_channels, width=None, num_layers: int = 2):
+    def __init__(
+        self,
+        input_channels,
+        hidden_channels,
+        width=None,
+        num_layers: int = 2,
+        output_activation: str = "none",
+    ):
         super(CDEFunc, self).__init__()
         del width, num_layers
         self.input_channels = input_channels
         self.hidden_channels = hidden_channels
+        if output_activation not in {"none", "tanh"}:
+            raise ValueError(f"Unknown output_activation '{output_activation}'")
+        self.output_activation = output_activation
         self.unet = UNet1D(in_channels=1, mid_channels=hidden_channels, out_channels=input_channels)
 
     def forward(self, t, z):
@@ -118,6 +128,8 @@ class CDEFunc(torch.nn.Module):
         z_mask = torch.ones((z_in.shape[0], 1, z_in.shape[-1]), device=z.device, dtype=z_in.dtype)
         vf = self.unet(z_in, z_mask)  # (b, input, hidden)
         vf = vf.transpose(1, 2).contiguous()  # (b, hidden, input)
+        if self.output_activation == "tanh":
+            vf = vf.tanh()
         return vf.to(input_dtype)
 
 
@@ -143,6 +155,7 @@ class NeuralCDE(nn.Module):
         interpolation: str = "linear",
         solver: str = "reversible_heun",
         num_layers: int = 2,
+        vf_output_activation: str = "none",
         readout_type: str = "unet",
         time_norm_mode: str = "utterance",
         time_norm_value: float = 1024.0,
@@ -173,7 +186,12 @@ class NeuralCDE(nn.Module):
         self.rtol = float(rtol)
 
         self.input_channels = self.channels + 1
-        self.func = CDEFunc(self.input_channels, self.hidden_channels, num_layers=num_layers)
+        self.func = CDEFunc(
+            self.input_channels,
+            self.hidden_channels,
+            num_layers=num_layers,
+            output_activation=vf_output_activation,
+        )
         self.init_rf = 8
         self.initial_unet = UNet1D(
             in_channels=self.input_channels,

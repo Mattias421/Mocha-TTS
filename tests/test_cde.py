@@ -120,3 +120,6 @@ def test_cde_validates_time_norm_config():
 
     with pytest.raises(ValueError, match="Unknown readout_type"):
         NeuralCDE(channels=2, hidden_channels=4, readout_type="bad")
+
+    with pytest.raises(ValueError, match="Unknown output_activation"):
+        NeuralCDE(channels=2, hidden_channels=4, vf_output_activation="bad")
