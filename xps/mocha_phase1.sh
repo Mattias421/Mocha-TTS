@@ -3,7 +3,7 @@
 #SBATCH --time=96:00:00
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=64G
-#SBATCH --output=logs/mocha_phase1_%A_%a.out
+#SBATCH --output=logs/mocha_phase1_%a.out
 #SBATCH --partition=gpu,gpu-h100,gpu-h100-nvl
 #SBATCH --qos=gpu
 #SBATCH --gres=gpu:1
