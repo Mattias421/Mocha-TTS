@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torchcde
 
+from matcha.models.components.decoder import Block1D, Downsample1D, Upsample1D
+
 
 def _fill_forward(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     """Forward-fill padded timesteps with the last valid value.
@@ -66,36 +68,57 @@ def _compute_tau_from_dt(
     return tau / denom
 
 
+class UNet1D(nn.Module):
+    """Small 1D UNet using existing decoder.py blocks."""
+
+    def __init__(self, in_channels: int, mid_channels: int, out_channels: int):
+        super().__init__()
+        self.mid_channels = int(mid_channels)
+        groups = self._groups_for(self.mid_channels)
+        self.in_block = Block1D(in_channels, self.mid_channels, groups=groups)
+        self.down = Downsample1D(self.mid_channels)
+        self.mid = Block1D(self.mid_channels, self.mid_channels, groups=groups)
+        self.up = Upsample1D(self.mid_channels, use_conv_transpose=True)
+        self.out_block = Block1D(2 * self.mid_channels, self.mid_channels, groups=groups)
+        self.proj = nn.Conv1d(self.mid_channels, out_channels, 1)
+
+    @staticmethod
+    def _groups_for(channels: int) -> int:
+        for g in (8, 4, 2, 1):
+            if channels % g == 0:
+                return g
+        return 1
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        x0 = self.in_block(x, mask)
+        d = self.down(x0)
+        d_mask = torch.nn.functional.interpolate(mask, size=d.shape[-1], mode="nearest")
+        m = self.mid(d, d_mask)
+        u = self.up(m)
+        if u.shape[-1] != x0.shape[-1]:
+            u = torch.nn.functional.interpolate(u, size=x0.shape[-1], mode="nearest")
+        h = torch.cat([x0, u], dim=1)
+        h = self.out_block(h, mask)
+        return self.proj(h) * mask
+
+
 class CDEFunc(torch.nn.Module):
     def __init__(self, input_channels, hidden_channels, width=None, num_layers: int = 2):
         super(CDEFunc, self).__init__()
+        del width, num_layers
         self.input_channels = input_channels
         self.hidden_channels = hidden_channels
-        self.num_layers = int(num_layers)
-        if self.num_layers < 1:
-            raise ValueError(f"Expected num_layers >= 1, got {self.num_layers}")
-
-        self.width = int(width) if width is not None else int(hidden_channels) * 2
-
-        hidden_layers = []
-        in_dim = hidden_channels
-        for _ in range(self.num_layers - 1):
-            hidden_layers.append(torch.nn.Linear(in_dim, self.width))
-            in_dim = self.width
-        self.hidden_layers = torch.nn.ModuleList(hidden_layers)
-        self.out = torch.nn.Linear(in_dim, input_channels * hidden_channels)
+        self.unet = UNet1D(in_channels=1, mid_channels=hidden_channels, out_channels=input_channels)
 
     def forward(self, t, z):
         # z has shape (batch, hidden_channels)
+        del t
         input_dtype = z.dtype
-        z = z.to(self.out.weight.dtype)
-        for layer in self.hidden_layers:
-            z = layer(z)
-            z = z.relu()
-        z = self.out(z)
-        z = z.tanh()
-        z = z.view(z.size(0), self.hidden_channels, self.input_channels)
-        return z.to(input_dtype)
+        z_in = z.unsqueeze(1).to(dtype=torch.float32)  # (b, 1, hidden)
+        z_mask = torch.ones((z_in.shape[0], 1, z_in.shape[-1]), device=z.device, dtype=z_in.dtype)
+        vf = self.unet(z_in, z_mask)  # (b, input, hidden)
+        vf = vf.transpose(1, 2).contiguous()  # (b, hidden, input)
+        return vf.to(input_dtype)
 
 
 class NeuralCDE(nn.Module):
@@ -133,11 +156,6 @@ class NeuralCDE(nn.Module):
         self.hidden_channels = int(hidden_channels)
 
         # +1 for a time-like feature derived from durations.
-        self.input_channels = self.channels + 1
-        self.func = CDEFunc(self.input_channels, self.hidden_channels, num_layers=num_layers)
-        self.initial = nn.Linear(self.input_channels, self.hidden_channels)
-        self.readout = nn.Linear(self.hidden_channels, self.channels)
-
         self.interpolation = interpolation
         self.solver = solver
         if time_norm_mode not in {"utterance", "global"}:
@@ -149,6 +167,20 @@ class NeuralCDE(nn.Module):
         self.dt = float(dt)
         self.atol = float(atol)
         self.rtol = float(rtol)
+
+        self.input_channels = self.channels + 1
+        self.func = CDEFunc(self.input_channels, self.hidden_channels, num_layers=num_layers)
+        self.init_rf = 8
+        self.initial_unet = UNet1D(
+            in_channels=self.input_channels,
+            mid_channels=self.hidden_channels,
+            out_channels=self.hidden_channels,
+        )
+        self.readout_unet = UNet1D(
+            in_channels=self.hidden_channels,
+            mid_channels=self.hidden_channels,
+            out_channels=self.channels,
+        )
 
     def forward(
         self, x: torch.Tensor, mask: torch.Tensor, durations: torch.Tensor | None = None
@@ -207,9 +239,12 @@ class NeuralCDE(nn.Module):
                 coeffs = torchcde.natural_cubic_spline_coeffs(path)
                 X = torchcde.NaturalCubicSpline(coeffs)
 
-            # z0 from the first observation.
-            x0 = X.evaluate(X.interval[0])
-            z0 = self.initial(x0)
+            # z0 from local receptive field at sequence start.
+            rf = min(self.init_rf, path.shape[1])
+            init_x = path[:, :rf, :].transpose(1, 2)  # (b, input, rf)
+            init_mask = torch.ones((b, 1, rf), device=x.device, dtype=compute_dtype)
+            init_feats = self.initial_unet(init_x, init_mask)  # (b, hidden, rf)
+            z0 = init_feats[:, :, -1]  # (b, hidden)
 
             # Produce an output for every token index (shared across the batch).
             t_grid = torch.linspace(
@@ -242,6 +277,7 @@ class NeuralCDE(nn.Module):
                 cdeint_kwargs["backend"] = backend
 
             z_t = torchcde.cdeint(**cdeint_kwargs)  # (b, t, hidden)
-            y_t = self.readout(z_t)  # (b, t, c)
-        y = y_t.transpose(1, 2).to(dtype=out_dtype)
+            z_seq = z_t.transpose(1, 2)  # (b, hidden, t)
+            y = self.readout_unet(z_seq, mask_t.unsqueeze(1))  # (b, c, t)
+        y = y.to(dtype=out_dtype)
         return y * mask.to(dtype=out_dtype)
