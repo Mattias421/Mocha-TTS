@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-ml eSpeak-NG/1.50-gompi-2020a
+module load eSpeak-NG/1.51-gfbf-2023a
 ml CUDA/12.4.0
 ml SoX/14.4.2-GCCcore-12.3.0
 
@@ -22,7 +22,7 @@ source .venv/bin/activate
 # lr: 1e-4,2e-4
 # dt: 1.0,0.5
 # time_norm_mode: utterance,global
-# fixed: num_layers=4, interpolation=linear, time_norm_value=1024
+# fixed: hidden_channels=64, interpolation=linear, time_norm_value=1024
 
 FREEZE=(true false)
 LR=(1e-4 2e-4)
@@ -63,9 +63,10 @@ python matcha/finetune_mocha.py \
   freeze_decoder="${freeze}" \
   model.optimizer.lr="${lr}" \
   data.batch_size=64 \
-  model.cde.num_layers=4 \
+  model.cde.hidden_channels=64 \
   model.cde.interpolation=linear \
   model.cde.dt="${dt}" \
   model.cde.time_norm_mode="${time_norm}" \
   model.cde.time_norm_value=1024 \
   trainer.max_steps=101 \
+  +trainer.limit_val_batches=8
