@@ -125,8 +125,8 @@ class NeuralCDE(nn.Module):
     """Neural CDE block for token sequences.
 
     This module is shaped to match the rest of Matcha's text-side components:
-    it consumes an encoder sequence `(B, C, T)` along with a `(B, 1, T)` mask and
-    optional per-token durations `(B, T)`/`(B, 1, T)`, and returns `(B, C, T)`.
+    it consumes an encoder sequence `(B, C, L)` along with a `(B, 1, L)` mask and
+    optional per-token durations `(B, L)`/`(B, 1, L)`, and returns `(B, C, L)`.
 
     Notes:
     - torchcde's solver expects a single shared 1D time grid across the batch.
