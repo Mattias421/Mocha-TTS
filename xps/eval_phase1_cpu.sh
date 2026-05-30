@@ -3,7 +3,6 @@
 #SBATCH --time=48:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --partition=cpu
 #SBATCH --array=0-15
 #SBATCH --output=logs/eval_phase1_%a.out
 
