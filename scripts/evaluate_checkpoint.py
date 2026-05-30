@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pickle
 import subprocess
 from pathlib import Path
 
@@ -24,19 +25,41 @@ from matcha.utils.utils import assert_model_downloaded, get_user_data_dir
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate wavs and evaluate MCD/F0 from a Matcha checkpoint.")
-    parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to custom model checkpoint.")
+    parser = argparse.ArgumentParser(
+        description="Generate wavs and evaluate MCD/F0 from a Matcha checkpoint."
+    )
+    parser.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default=None,
+        help="Path to custom model checkpoint.",
+    )
     parser.add_argument(
         "--use_official_ckpt",
         action="store_true",
         help="Use official Matcha checkpoint (default model: matcha_ljspeech).",
     )
-    parser.add_argument("--model_name", type=str, default="matcha_ljspeech", choices=MATCHA_URLS.keys())
-    parser.add_argument("--vocoder", type=str, default=None, choices=VOCODER_URLS.keys())
-    parser.add_argument("--filelist", type=str, required=True, help="Path to filelist like wav|text.")
-    parser.add_argument("--outdir", type=str, required=True, help="Directory for generated wavs + metrics.")
-    parser.add_argument("--max_utts", type=int, default=None, help="Optional cap on utterances.")
-    parser.add_argument("--steps", type=int, default=10, help="Flow matching decode steps.")
+    parser.add_argument(
+        "--model_name", type=str, default="matcha_ljspeech", choices=MATCHA_URLS.keys()
+    )
+    parser.add_argument(
+        "--vocoder", type=str, default=None, choices=VOCODER_URLS.keys()
+    )
+    parser.add_argument(
+        "--filelist", type=str, required=True, help="Path to filelist like wav|text."
+    )
+    parser.add_argument(
+        "--outdir",
+        type=str,
+        required=True,
+        help="Directory for generated wavs + metrics.",
+    )
+    parser.add_argument(
+        "--max_utts", type=int, default=None, help="Optional cap on utterances."
+    )
+    parser.add_argument(
+        "--steps", type=int, default=10, help="Flow matching decode steps."
+    )
     parser.add_argument("--temperature", type=float, default=0.667)
     parser.add_argument("--length_scale", type=float, default=1.0)
     parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda"])
@@ -53,7 +76,9 @@ def resolve_model_ckpt(args: argparse.Namespace) -> tuple[str, str]:
         return args.model_name, str(ckpt_path)
 
     if args.checkpoint_path is None:
-        raise ValueError("Either --checkpoint_path or --use_official_ckpt must be provided.")
+        raise ValueError(
+            "Either --checkpoint_path or --use_official_ckpt must be provided."
+        )
     ckpt_path = resolve_checkpoint_path(Path(args.checkpoint_path))
     return "custom_model", str(ckpt_path)
 
@@ -72,7 +97,9 @@ def resolve_checkpoint_path(path: Path) -> Path:
     raise FileNotFoundError(f"Could not resolve checkpoint file from: {path}")
 
 
-def _remap_legacy_cde_keys(state_dict: dict[str, torch.Tensor]) -> tuple[dict[str, torch.Tensor], int]:
+def _remap_legacy_cde_keys(
+    state_dict: dict[str, torch.Tensor],
+) -> tuple[dict[str, torch.Tensor], int]:
     remapped = dict(state_dict)
     mapping = {
         "cde.func.linear1.weight": "cde.func.hidden_layers.0.weight",
@@ -91,20 +118,28 @@ def _remap_legacy_cde_keys(state_dict: dict[str, torch.Tensor]) -> tuple[dict[st
 def load_custom_matcha_with_fallback(ckpt_path: str, device: torch.device):
     try:
         return load_matcha("custom_model", ckpt_path, device)
-    except RuntimeError as exc:
-        if "cde.func.hidden_layers.0.weight" not in str(exc):
+    except (RuntimeError, pickle.UnpicklingError) as exc:
+        msg = str(exc)
+        is_legacy_cde = "cde.func.hidden_layers.0.weight" in msg
+        is_torch26_weights_only = (
+            "Weights only load failed" in msg or "Unsupported global" in msg
+        )
+        if not (is_legacy_cde or is_torch26_weights_only):
             raise
 
-    print("[!] Detected legacy CDE checkpoint format. Applying key remap fallback...")
-    checkpoint = torch.load(ckpt_path, map_location="cpu")
+    print("[!] Falling back to trusted full-checkpoint load (weights_only=False)...")
+    checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     hparams = checkpoint.get("hyper_parameters")
     if hparams is None:
-        raise ValueError("Checkpoint is missing 'hyper_parameters'; cannot construct MatchaTTS for fallback load.")
+        raise ValueError(
+            "Checkpoint is missing 'hyper_parameters'; cannot construct MatchaTTS for fallback load."
+        )
 
     model = MatchaTTS(**hparams)
     state_dict = checkpoint["state_dict"]
     remapped_state_dict, n_remapped = _remap_legacy_cde_keys(state_dict)
-    print(f"[!] Remapped {n_remapped} legacy CDE parameter keys.")
+    if n_remapped > 0:
+        print(f"[!] Remapped {n_remapped} legacy CDE parameter keys.")
     model.load_state_dict(remapped_state_dict, strict=True)
     model = model.to(device)
     model.eval()
@@ -167,7 +202,9 @@ def generate_wavs(
         sf.write(out_wav_dir / f"{utt_id}.wav", waveform.cpu().numpy(), 22050, "PCM_24")
 
 
-def run_metric_script(script: Path, gen_dir: Path, gt_dir: Path, out_dir: Path, nj: int):
+def run_metric_script(
+    script: Path, gen_dir: Path, gt_dir: Path, out_dir: Path, nj: int
+):
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         ".venv/bin/python",
@@ -254,7 +291,9 @@ def main():
 
     mcd_out.mkdir(parents=True, exist_ok=True)
     run_mcd_v2_script(Path("scripts/evaluate_mcd_v2.py"), gen_dir, gt_dir)
-    run_metric_script(Path("scripts/evaluate_f0.py"), gen_dir, gt_dir, f0_out, args.f0_nj)
+    run_metric_script(
+        Path("scripts/evaluate_f0.py"), gen_dir, gt_dir, f0_out, args.f0_nj
+    )
 
     summary = {
         "checkpoint": ckpt_path,
@@ -267,7 +306,9 @@ def main():
         "log_f0_rmse": parse_avg_result(f0_out / "log_f0_rmse_avg_result.txt"),
     }
     outdir.mkdir(parents=True, exist_ok=True)
-    (outdir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (outdir / "summary.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8"
+    )
     print(json.dumps(summary, indent=2))
 
 
