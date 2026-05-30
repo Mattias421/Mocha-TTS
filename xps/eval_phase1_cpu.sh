@@ -8,6 +8,10 @@
 
 set -euo pipefail
 
+module load eSpeak-NG
+module load libsndfile
+module load OpenBLAS
+
 # --- user-configurable ---
 LOGS_DIR="${LOGS_DIR:-/mnt/parscratch/users/acq22mc/exp/Mocha-TTS/logs/finetune_mocha}"
 OUT_ROOT="${OUT_ROOT:-${LOGS_DIR}/eval_phase1}"
