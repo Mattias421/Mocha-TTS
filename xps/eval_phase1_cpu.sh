@@ -40,14 +40,35 @@ RUN_DIR="${RUN_DIRS[$IDX]}"
 RUN_NAME="$(basename "${RUN_DIR}")"
 
 CKPT=""
-if [[ -f "${RUN_DIR}/checkpoints/last.ckpt" ]]; then
-  CKPT="${RUN_DIR}/checkpoints/last.ckpt"
-elif [[ -f "${RUN_DIR}/last.ckpt" ]]; then
-  CKPT="${RUN_DIR}/last.ckpt"
-else
-  latest="$(ls -1 "${RUN_DIR}"/checkpoints/checkpoint_*.ckpt 2>/dev/null | sort | tail -n 1 || true)"
-  if [[ -n "${latest}" ]]; then
-    CKPT="${latest}"
+
+# New layout: <run>/runs/<timestamp>/checkpoints/*.ckpt
+latest_run="$(ls -1d "${RUN_DIR}"/runs/* 2>/dev/null | sort | tail -n 1 || true)"
+if [[ -n "${latest_run}" ]]; then
+  if [[ -f "${latest_run}/checkpoints/best.ckpt" ]]; then
+    CKPT="${latest_run}/checkpoints/best.ckpt"
+  elif [[ -f "${latest_run}/checkpoints/last.ckpt" ]]; then
+    CKPT="${latest_run}/checkpoints/last.ckpt"
+  else
+    latest="$(ls -1 "${latest_run}"/checkpoints/checkpoint_*.ckpt 2>/dev/null | sort | tail -n 1 || true)"
+    if [[ -n "${latest}" ]]; then
+      CKPT="${latest}"
+    fi
+  fi
+fi
+
+# Fallback older layouts
+if [[ -z "${CKPT}" ]]; then
+  if [[ -f "${RUN_DIR}/checkpoints/best.ckpt" ]]; then
+    CKPT="${RUN_DIR}/checkpoints/best.ckpt"
+  elif [[ -f "${RUN_DIR}/checkpoints/last.ckpt" ]]; then
+    CKPT="${RUN_DIR}/checkpoints/last.ckpt"
+  elif [[ -f "${RUN_DIR}/last.ckpt" ]]; then
+    CKPT="${RUN_DIR}/last.ckpt"
+  else
+    latest="$(ls -1 "${RUN_DIR}"/checkpoints/checkpoint_*.ckpt 2>/dev/null | sort | tail -n 1 || true)"
+    if [[ -n "${latest}" ]]; then
+      CKPT="${latest}"
+    fi
   fi
 fi
 
