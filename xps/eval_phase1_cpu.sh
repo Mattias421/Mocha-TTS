@@ -26,6 +26,14 @@ MAX_UTTS="${MAX_UTTS:-}"
 
 source .venv/bin/activate
 
+# Fix TLS cert validation on some HPC images (urllib/wget downloads)
+CERT_BUNDLE="$(python -c 'import certifi; print(certifi.where())' 2>/dev/null || true)"
+if [[ -n "${CERT_BUNDLE}" ]]; then
+  export SSL_CERT_FILE="${CERT_BUNDLE}"
+  export REQUESTS_CA_BUNDLE="${CERT_BUNDLE}"
+  export CURL_CA_BUNDLE="${CERT_BUNDLE}"
+fi
+
 mapfile -t RUN_DIRS < <(find "${LOGS_DIR}" -mindepth 1 -maxdepth 1 -type d -name 'phase1*' | sort)
 TOTAL="${#RUN_DIRS[@]}"
 
